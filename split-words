@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+
+import sys
+import re
+from collections import Counter
+from nltk.corpus import gutenberg
+
+from docopt import docopt
+
+__doc__ = '''
+Usage: split-words [-d DICT] TEXT
+
+Options:
+  -d DICT       Where to save the local dictionary.
+  -h --help     Show this screen.
+'''
+
+with open(__file__ + '/../data/words') as words_f:
+    DICT = set(words_f.read().split('\n'))
+CORPUS = Counter(gutenberg.words())
+MAX_WORD_LENGTH = max(map(len, CORPUS))
+TOTAL = float(sum(CORPUS.values()))
+
+def word_prob(word):
+    return CORPUS[word] / TOTAL
+
+
+def viterbi_segment(text):
+    probs, lasts = [1.0], [0]
+    for i in range(1, len(text) + 1):
+        prob_k, k = max((probs[j] * word_prob(text[j:i]), j)
+                        for j in range(max(0, i - MAX_WORD_LENGTH), i))
+        probs.append(prob_k)
+        lasts.append(k)
+    words = []
+    i = len(text)
+    while 0 < i:
+        words.append(text[lasts[i]:i])
+        i = lasts[i]
+    words.reverse()
+    return words, probs[-1]
+
+
+def choose(options):
+    for (i, option_text) in enumerate(options):
+        print('[%d] %s' % (i, option_text))
+    while True:
+        choice = input('>> ')
+        try:
+            ichoice = int(choice)
+            if ichoice >= 0 and ichoice < len(options):
+                return ichoice
+        except ValueError:
+            pass
+
+
+def main(args):
+    with open(args['TEXT']) as f:
+        text = f.read()
+
+    if '-d' in args:
+        with open(args['-d']) as dict_f:
+            local_dict = set(dict_f.read().split('\n'))
+    else:
+        local_dict = set([])
+    CORPUS.update(Counter(list(local_dict) * 10))
+
+    replacements = {}
+
+    text_start = 0
+    while text_start < len(text):
+        match = re.search('[a-zA-Z]+', text[text_start:])
+        if match is None:
+            break
+        (match_start, match_end) = match.span()
+
+        word = match.group(0)
+        new_word = None
+        if word in replacements:
+            new_word = replacements[word]
+
+        (segments, prob) = viterbi_segment(word.lower())
+
+        if len(segments) > 1 and word.lower() not in local_dict and word not in replacements and word.lower() not in DICT:
+            perc = int((text_start / len(text)) * 100)
+            context = text[match_start - 10 + text_start : match_end + 10 + text_start]
+            print('%02d%% %s "%s"' % (perc, word, context))
+            choices = [
+                'Replace with "%s"' % (' '.join(segments)),
+                'Replace all with "%s"' % (' '.join(segments)),
+                'Ignore',
+                'Ignore all and remember',
+                'Quit'
+            ]
+            choice = choose(choices)
+            if choice == 0:
+                new_word = ' '.join(segments)
+            elif choice == 1:
+                new_word = ' '.join(segments)
+                replacements[word] = new_word
+            elif choice == 2:
+                pass
+            elif choice == 3:
+                local_dict.add(word.lower())
+            elif choice == 4:
+                break
+            else:
+                raise RuntimeError('Unexpected choice.')
+
+        if new_word is None:
+            text_start += match_end
+        else:
+            text = text[:text_start+match_start] + new_word + text[text_start+match_end:]
+            text_start += len(new_word)
+
+    with open(args['-d'], mode='w') as dict_f:
+        dict_f.write('\n'.join(local_dict))
+    print(text)
+
+if __name__ == '__main__':
+    main(docopt(__doc__))
